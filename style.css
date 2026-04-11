@@ -26,12 +26,6 @@ h1 {
   text-transform: uppercase;
 }
 
-.subtitle {
-  margin: 0;
-  color: #bbc2f8;
-  font-size: 0.95rem;
-}
-
 canvas {
   border: 2px solid #4d5cdb;
   border-radius: 8px;
@@ -46,6 +40,35 @@ canvas {
   max-width: 800px;
   display: flex;
   justify-content: space-between;
+  align-items: center;
   font-weight: 600;
+  font-size: 0.92rem;
   color: #d8ddff;
+  gap: 0.5rem;
+}
+
+#weapon {
+  color: #f4f76f;
+  min-width: 5rem;
+  text-align: center;
+}
+
+#highscore {
+  color: #ff9f43;
+}
+
+#mute {
+  background: none;
+  border: 1px solid #4d5cdb;
+  border-radius: 4px;
+  color: #bbc2f8;
+  cursor: pointer;
+  font-size: 0.82rem;
+  padding: 0.2rem 0.5rem;
+  font-family: inherit;
+  transition: background 0.15s;
+}
+
+#mute:hover {
+  background: rgba(77, 92, 219, 0.25);
 }
