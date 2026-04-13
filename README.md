@@ -44,7 +44,35 @@ python3 stock_analyzer.py sample_stocks.csv \
 
 # export scored results
 python3 stock_analyzer.py sample_stocks.csv --output scored_stocks.csv
+
+# sector-neutral ranking (uses sector column)
+python3 stock_analyzer.py sample_stocks.csv --sector-neutral
+
+# run backtest (requires date and forward_return_* columns)
+python3 stock_analyzer.py sample_backtest_stocks.csv \
+  --sector-neutral \
+  --backtest \
+  --backtest-score-column sector_neutral
 ```
+
+### Web UI
+
+The web UI lets you upload CSV files and visualize ranking + backtest results:
+
+```bash
+python3 stock_web_app.py
+```
+
+Then open `http://127.0.0.1:5000`.
+
+In the UI you can:
+
+- Upload any stock CSV
+- Toggle sector-neutral ranking
+- Customize factor weights
+- Run optional backtests
+- View bar and line charts for rankings/backtest
+- Inspect a sortable-style results table with factor columns
 
 ### Input CSV format
 
@@ -59,13 +87,20 @@ Optional but used when present:
 - Momentum: `return_1m`, `return_6m`, `return_12m`
 - Value: `earnings_yield`, `pe_ratio`, `fcf_yield`, `price_to_book`
 - Quality: `roe`, `profit_margin`, `net_income_growth_1y`
-- Other helper columns: `price`, `price_1m_ago`, `price_6m_ago`, `price_12m_ago`, `name`
+- Other helper columns: `price`, `price_1m_ago`, `price_6m_ago`, `price_12m_ago`, `name`, `sector`
+- Backtest columns: `date`, `forward_return_1m` (or `forward_return_3m`, `forward_return_6m`)
 
 The tool derives missing metrics where possible, e.g.:
 
 - `dividend_yield = annual_dividend / price`
 - `earnings_yield = 1 / pe_ratio`
 - returns from current and lookback prices
+
+Backtest interpretation:
+
+- At each date, stocks are ranked by score into quintiles.
+- The report shows top-quintile average return, bottom-quintile average return, and their spread.
+- Cumulative long-short and long-only performance are tracked over dates.
 
 ## Controls
 

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Stock Factor Analyzer</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Stock Factor Analyzer</h1>
+    <p class="small">
+      Upload a CSV, analyze multi-factor stock scores, apply sector-neutral ranking,
+      and optionally run a quantile backtest.
+    </p>
+
+    <section class="card">
+      <form id="analyze-form">
+        <div class="form-grid">
+          <div>
+            <label for="csv-file">CSV file</label>
+            <input id="csv-file" name="csv_file" type="file" accept=".csv,text/csv" required />
+          </div>
+          <div>
+            <label for="top-n">Top rows</label>
+            <input id="top-n" name="top_n" type="number" min="1" max="500" value="20" />
+          </div>
+          <div>
+            <label for="returns-scale">Return scale</label>
+            <select id="returns-scale" name="returns_scale">
+              <option value="auto" selected>auto</option>
+              <option value="decimal">decimal</option>
+              <option value="percent">percent</option>
+            </select>
+          </div>
+          <div>
+            <label for="weights">Factor weights</label>
+            <input
+              id="weights"
+              name="weights"
+              type="text"
+              value="income=0.30,risk=0.30,momentum=0.30,value=0.05,quality=0.05"
+            />
+          </div>
+        </div>
+
+        <div class="checkbox-row">
+          <label>
+            <input id="sector-neutral" name="sector_neutral" type="checkbox" />
+            Sector-neutral ranking
+          </label>
+          <label for="sector-column">Sector column</label>
+          <input id="sector-column" name="sector_column" type="text" value="sector" />
+        </div>
+
+        <div class="checkbox-row">
+          <label>
+            <input id="run-backtest" name="run_backtest" type="checkbox" />
+            Run backtest
+          </label>
+          <label for="backtest-forward-column">Forward return column</label>
+          <input id="backtest-forward-column" name="backtest_forward_column" type="text" value="forward_return_1m" />
+          <label for="backtest-score-column">Backtest score</label>
+          <select id="backtest-score-column" name="backtest_score_column">
+            <option value="composite" selected>composite</option>
+            <option value="sector_neutral">sector_neutral</option>
+          </select>
+        </div>
+
+        <button type="submit">Analyze</button>
+        <button id="export-btn" type="button">Export visible results CSV</button>
+      </form>
+      <p class="small">
+        For backtesting, include <code>date</code> and <code>forward_return_1m</code> (or another forward return column).
+      </p>
+    </section>
+
+    <div id="error-banner" class="error" hidden></div>
+
+    <section id="results-section" class="card" hidden>
+      <h2>Ranked Stocks</h2>
+      <p id="result-meta" class="small"></p>
+      <div class="chart-grid">
+        <div>
+          <h3>Top Scores</h3>
+          <canvas id="score-chart" height="180"></canvas>
+        </div>
+        <div>
+          <h3>Average Factor Profile (Top N)</h3>
+          <canvas id="factor-chart" height="180"></canvas>
+        </div>
+      </div>
+      <table id="results-table">
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Ticker</th>
+            <th>Composite</th>
+            <th>Sector-Neutral</th>
+            <th>Income</th>
+            <th>Risk</th>
+            <th>Momentum</th>
+            <th>Value</th>
+            <th>Quality</th>
+            <th>Signal</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="backtest-section" class="card" hidden>
+      <h2>Backtest</h2>
+      <div id="backtest-summary"></div>
+      <canvas id="backtest-chart" height="180"></canvas>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

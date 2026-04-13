@@ -15,11 +15,18 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from collections import defaultdict
+from datetime import datetime
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 
 MetricDef = Tuple[str, float, bool]  # (metric_name, metric_weight, higher_is_better)
+StockRow = Dict[str, Any]
+ScoreRow = Dict[str, Any]
+
+TEXT_COLUMNS = {"ticker", "name", "sector", "date"}
 
 FACTOR_DEFINITIONS: Dict[str, Sequence[MetricDef]] = {
     "income": (
@@ -114,7 +121,7 @@ def normalize_series(values: Sequence[Optional[float]], higher_is_better: bool) 
     return scores
 
 
-def derive_metrics(stock: Dict[str, Optional[float]]) -> None:
+def derive_metrics(stock: StockRow) -> None:
     price = stock.get("price")
     annual_dividend = stock.get("annual_dividend")
     pe_ratio = stock.get("pe_ratio")
@@ -137,36 +144,45 @@ def derive_metrics(stock: Dict[str, Optional[float]]) -> None:
                 stock[return_field] = (price / lookback_price) - 1.0
 
 
-def load_stocks(csv_path: Path, return_scale: str) -> List[Dict[str, Optional[float]]]:
-    stocks: List[Dict[str, Optional[float]]] = []
-    with csv_path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        if not reader.fieldnames or "ticker" not in reader.fieldnames:
-            raise ValueError("CSV must include a 'ticker' column.")
+def _load_stocks_from_reader(reader: csv.DictReader, return_scale: str) -> List[StockRow]:
+    stocks: List[StockRow] = []
+    if not reader.fieldnames or "ticker" not in reader.fieldnames:
+        raise ValueError("CSV must include a 'ticker' column.")
 
-        for row in reader:
-            stock: Dict[str, Optional[float]] = {}
-            for key, raw_value in row.items():
-                if key is None:
-                    continue
-                key = key.strip()
-                if key in ("ticker", "name"):
-                    stock[key] = (raw_value or "").strip()  # type: ignore[assignment]
-                else:
-                    stock[key] = parse_numeric(raw_value or "")
+    for row in reader:
+        stock: StockRow = {}
+        for key, raw_value in row.items():
+            if key is None:
+                continue
+            key = key.strip()
+            if key in TEXT_COLUMNS:
+                stock[key] = (raw_value or "").strip()
+            else:
+                stock[key] = parse_numeric(raw_value or "")
 
-            derive_metrics(stock)
+        derive_metrics(stock)
 
-            for return_key in ("return_1m", "return_6m", "return_12m"):
-                stock[return_key] = normalize_return(stock.get(return_key), return_scale)
+        for return_key in ("return_1m", "return_6m", "return_12m"):
+            stock[return_key] = normalize_return(stock.get(return_key), return_scale)
 
-            ticker = stock.get("ticker")
-            if isinstance(ticker, str) and ticker:
-                stocks.append(stock)
+        ticker = stock.get("ticker")
+        if isinstance(ticker, str) and ticker:
+            stocks.append(stock)
 
     if not stocks:
         raise ValueError("No valid stock rows found in CSV.")
     return stocks
+
+
+def load_stocks(csv_path: Path, return_scale: str) -> List[StockRow]:
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        return _load_stocks_from_reader(reader, return_scale)
+
+
+def load_stocks_from_text(csv_text: str, return_scale: str) -> List[StockRow]:
+    reader = csv.DictReader(io.StringIO(csv_text))
+    return _load_stocks_from_reader(reader, return_scale)
 
 
 def parse_factor_weights(weights_arg: str) -> Dict[str, float]:
@@ -198,7 +214,7 @@ def parse_factor_weights(weights_arg: str) -> Dict[str, float]:
     return weights
 
 
-def compute_factor_scores(stocks: Sequence[Dict[str, Optional[float]]]) -> Dict[str, List[Optional[float]]]:
+def compute_factor_scores(stocks: Sequence[StockRow]) -> Dict[str, List[Optional[float]]]:
     factor_scores: Dict[str, List[Optional[float]]] = {}
 
     for factor, metrics in FACTOR_DEFINITIONS.items():
@@ -238,12 +254,12 @@ def recommendation(score: float) -> str:
 
 
 def score_stocks(
-    stocks: Sequence[Dict[str, Optional[float]]],
+    stocks: Sequence[StockRow],
     factor_weights: Dict[str, float],
-) -> List[Dict[str, object]]:
+) -> List[ScoreRow]:
     factor_scores = compute_factor_scores(stocks)
 
-    results: List[Dict[str, object]] = []
+    results: List[ScoreRow] = []
     for i, stock in enumerate(stocks):
         weighted_sum = 0.0
         used_weight = 0.0
@@ -265,12 +281,18 @@ def score_stocks(
         if composite is None:
             continue
 
-        item: Dict[str, object] = {
+        item: ScoreRow = {
             "ticker": stock.get("ticker", ""),
             "name": stock.get("name", ""),
             "composite": composite,
             "recommendation": recommendation(composite),
         }
+        for text_key in ("sector", "date"):
+            if isinstance(stock.get(text_key), str) and stock[text_key]:
+                item[text_key] = stock[text_key]
+        for numeric_key in ("forward_return_1m", "forward_return_3m", "forward_return_6m"):
+            if stock.get(numeric_key) is not None:
+                item[numeric_key] = stock.get(numeric_key)
         item.update(stock_factor_scores)
         results.append(item)
 
@@ -284,21 +306,66 @@ def format_score(value: Optional[float]) -> str:
     return f"{value:.3f}"
 
 
-def print_results(results: Sequence[Dict[str, object]], top_n: int) -> None:
+def apply_sector_neutral_ranking(results: Sequence[ScoreRow], sector_column: str = "sector") -> List[ScoreRow]:
+    rows = [dict(item) for item in results]
+
+    grouped: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+    ungrouped: List[int] = []
+    for idx, row in enumerate(rows):
+        sector = row.get(sector_column)
+        if not isinstance(sector, str) or not sector.strip():
+            ungrouped.append(idx)
+            continue
+
+        date_key = ""
+        if isinstance(row.get("date"), str):
+            date_key = row["date"].strip()
+        grouped[(date_key, sector.strip())].append(idx)
+
+    if not grouped:
+        for row in rows:
+            row["sector_neutral"] = row.get("composite")
+        return rows
+
+    for indices in grouped.values():
+        sector_composites = [rows[i].get("composite") for i in indices]
+        normalized = normalize_series(sector_composites, higher_is_better=True)
+        for local_idx, global_idx in enumerate(indices):
+            neutral_score = normalized[local_idx]
+            rows[global_idx]["sector_neutral"] = neutral_score
+
+    for idx in ungrouped:
+        rows[idx]["sector_neutral"] = rows[idx].get("composite")
+    for row in rows:
+        if row.get("sector_neutral") is None:
+            row["sector_neutral"] = row.get("composite")
+
+    rows.sort(key=lambda item: float(item.get("sector_neutral", 0.0)), reverse=True)
+    return rows
+
+
+def print_results(results: Sequence[ScoreRow], top_n: int, use_sector_neutral: bool = False) -> None:
     rows = list(results if top_n <= 0 else results[:top_n])
     if not rows:
         print("No scored stocks to display.")
         return
 
-    columns = ["Rank", "Ticker", "Composite", "Income", "Risk", "Momentum", "Value", "Quality", "Signal"]
+    columns = ["Rank", "Ticker", "Composite"]
+    if use_sector_neutral:
+        columns.append("SectorNeutral")
+    columns.extend(["Income", "Risk", "Momentum", "Value", "Quality", "Signal"])
     rendered_rows: List[List[str]] = []
 
     for idx, item in enumerate(rows, start=1):
-        rendered_rows.append(
+        row = [
+            str(idx),
+            str(item.get("ticker", "")),
+            format_score(item.get("composite")),  # type: ignore[arg-type]
+        ]
+        if use_sector_neutral:
+            row.append(format_score(item.get("sector_neutral")))  # type: ignore[arg-type]
+        row.extend(
             [
-                str(idx),
-                str(item.get("ticker", "")),
-                format_score(item.get("composite")),  # type: ignore[arg-type]
                 format_score(item.get("income")),  # type: ignore[arg-type]
                 format_score(item.get("risk")),  # type: ignore[arg-type]
                 format_score(item.get("momentum")),  # type: ignore[arg-type]
@@ -307,6 +374,7 @@ def print_results(results: Sequence[Dict[str, object]], top_n: int) -> None:
                 str(item.get("recommendation", "")),
             ]
         )
+        rendered_rows.append(row)
 
     widths = [len(col) for col in columns]
     for row in rendered_rows:
@@ -323,11 +391,14 @@ def print_results(results: Sequence[Dict[str, object]], top_n: int) -> None:
         print(render_row(row))
 
 
-def write_output_csv(output_path: Path, results: Sequence[Dict[str, object]]) -> None:
-    fieldnames = [
+def write_output_csv(output_path: Path, results: Sequence[ScoreRow]) -> None:
+    base_fieldnames = [
         "ticker",
         "name",
+        "sector",
+        "date",
         "composite",
+        "sector_neutral",
         "income",
         "risk",
         "momentum",
@@ -335,6 +406,10 @@ def write_output_csv(output_path: Path, results: Sequence[Dict[str, object]]) ->
         "quality",
         "recommendation",
     ]
+    backtest_fields = ["forward_return_1m", "forward_return_3m", "forward_return_6m"]
+    fieldnames = list(base_fieldnames)
+    if any(any(field in row for field in backtest_fields) for row in results):
+        fieldnames.extend(backtest_fields)
     with output_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -343,15 +418,125 @@ def write_output_csv(output_path: Path, results: Sequence[Dict[str, object]]) ->
                 {
                     "ticker": row.get("ticker", ""),
                     "name": row.get("name", ""),
+                    "sector": row.get("sector", ""),
+                    "date": row.get("date", ""),
                     "composite": format_score(row.get("composite")),  # type: ignore[arg-type]
+                    "sector_neutral": format_score(row.get("sector_neutral")),  # type: ignore[arg-type]
                     "income": format_score(row.get("income")),  # type: ignore[arg-type]
                     "risk": format_score(row.get("risk")),  # type: ignore[arg-type]
                     "momentum": format_score(row.get("momentum")),  # type: ignore[arg-type]
                     "value": format_score(row.get("value")),  # type: ignore[arg-type]
                     "quality": format_score(row.get("quality")),  # type: ignore[arg-type]
                     "recommendation": row.get("recommendation", ""),
+                    "forward_return_1m": format_score(row.get("forward_return_1m")),  # type: ignore[arg-type]
+                    "forward_return_3m": format_score(row.get("forward_return_3m")),  # type: ignore[arg-type]
+                    "forward_return_6m": format_score(row.get("forward_return_6m")),  # type: ignore[arg-type]
                 }
             )
+
+
+def parse_backtest_date(date_value: Any) -> Optional[datetime]:
+    if not isinstance(date_value, str) or not date_value.strip():
+        return None
+    text = date_value.strip()
+    for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m", "%Y/%m"):
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def percentile_cut(values: Sequence[float], q: int) -> float:
+    if not values:
+        return 0.0
+    sorted_values = sorted(values)
+    position = max(0, min(len(sorted_values) - 1, int(round((q / 100.0) * (len(sorted_values) - 1)))))
+    return sorted_values[position]
+
+
+def run_backtest(
+    results: Sequence[ScoreRow],
+    forward_return_column: str = "forward_return_1m",
+    score_column: str = "composite",
+) -> Dict[str, Any]:
+    by_date: Dict[str, List[Tuple[float, float]]] = defaultdict(list)
+    for row in results:
+        date_val = row.get("date")
+        score = row.get(score_column)
+        if score is None and score_column != "composite":
+            score = row.get("composite")
+        forward_return = row.get(forward_return_column)
+        if not isinstance(date_val, str):
+            continue
+        if not isinstance(score, (int, float)) or not isinstance(forward_return, (int, float)):
+            continue
+        by_date[date_val].append((float(score), float(forward_return)))
+
+    dated_rows: List[Tuple[datetime, str, List[Tuple[float, float]]]] = []
+    for date_key, pairs in by_date.items():
+        parsed = parse_backtest_date(date_key)
+        if parsed and len(pairs) >= 4:
+            dated_rows.append((parsed, date_key, pairs))
+
+    dated_rows.sort(key=lambda item: item[0])
+    if not dated_rows:
+        return {"periods": [], "summary": None}
+
+    periods: List[Dict[str, Any]] = []
+    cumulative = 1.0
+    long_only_cumulative = 1.0
+    for _, date_key, pairs in dated_rows:
+        pairs.sort(key=lambda item: item[0], reverse=True)
+        bucket_size = max(1, len(pairs) // 5)
+        top_bucket = [r for _, r in pairs[:bucket_size]]
+        bottom_bucket = [r for _, r in pairs[-bucket_size:]]
+
+        top_avg = sum(top_bucket) / len(top_bucket)
+        bottom_avg = sum(bottom_bucket) / len(bottom_bucket)
+        spread = top_avg - bottom_avg
+        cumulative *= 1.0 + spread
+        long_only_cumulative *= 1.0 + top_avg
+
+        periods.append(
+            {
+                "date": date_key,
+                "n_stocks": len(pairs),
+                "top_quantile_return": top_avg,
+                "bottom_quantile_return": bottom_avg,
+                "long_short_spread": spread,
+                "cumulative_long_short": cumulative - 1.0,
+                "cumulative_long_only": long_only_cumulative - 1.0,
+            }
+        )
+
+    spreads = [p["long_short_spread"] for p in periods]
+    summary = {
+        "periods": len(periods),
+        "avg_long_short_spread": sum(spreads) / len(spreads),
+        "median_long_short_spread": percentile_cut(spreads, 50),
+        "final_cumulative_long_short": periods[-1]["cumulative_long_short"],
+        "final_cumulative_long_only": periods[-1]["cumulative_long_only"],
+    }
+    return {"periods": periods, "summary": summary}
+
+
+def print_backtest(backtest_result: Dict[str, Any]) -> None:
+    summary = backtest_result.get("summary")
+    periods = backtest_result.get("periods", [])
+    if not summary or not periods:
+        print("\nBacktest: not enough valid rows. Include date + forward returns across multiple dates.")
+        return
+
+    print("\nBacktest summary (top quintile minus bottom quintile):")
+    print(f"- Periods: {summary['periods']}")
+    print(f"- Avg spread: {summary['avg_long_short_spread']:.3%}")
+    print(f"- Median spread: {summary['median_long_short_spread']:.3%}")
+    print(f"- Final cumulative long-short: {summary['final_cumulative_long_short']:.3%}")
+    print(f"- Final cumulative long-only: {summary['final_cumulative_long_only']:.3%}")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -385,6 +570,32 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="Optional output CSV path for scored results.",
     )
+    parser.add_argument(
+        "--sector-neutral",
+        action="store_true",
+        help="Enable sector-neutral ranking (requires sector column for best results).",
+    )
+    parser.add_argument(
+        "--sector-column",
+        default="sector",
+        help="Column used for sector grouping when --sector-neutral is enabled.",
+    )
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="Run a basic quantile backtest if date and forward returns are available.",
+    )
+    parser.add_argument(
+        "--backtest-forward-column",
+        default="forward_return_1m",
+        help="Forward return column for backtest (default: forward_return_1m).",
+    )
+    parser.add_argument(
+        "--backtest-score-column",
+        choices=("composite", "sector_neutral"),
+        default="composite",
+        help="Score column used for ranking in backtest.",
+    )
     return parser
 
 
@@ -395,11 +606,23 @@ def main() -> None:
     factor_weights = parse_factor_weights(args.weights)
     stocks = load_stocks(args.input_csv, return_scale=args.returns_scale)
     results = score_stocks(stocks, factor_weights)
+    if args.sector_neutral:
+        results = apply_sector_neutral_ranking(results, sector_column=args.sector_column)
+    else:
+        for row in results:
+            row["sector_neutral"] = row.get("composite")
 
-    print_results(results, top_n=args.top)
+    print_results(results, top_n=args.top, use_sector_neutral=args.sector_neutral)
     if args.output:
         write_output_csv(args.output, results)
         print(f"\nSaved scored results to: {args.output}")
+    if args.backtest:
+        bt = run_backtest(
+            results,
+            forward_return_column=args.backtest_forward_column,
+            score_column=args.backtest_score_column,
+        )
+        print_backtest(bt)
 
     print("\nNote: This is a quantitative screening tool, not financial advice.")
 
