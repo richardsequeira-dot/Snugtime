@@ -7,10 +7,65 @@ A fully-featured browser-based Space Invaders game built with vanilla HTML, CSS,
 Open `index.html` in a browser, or serve locally:
 
 ```bash
-python -m http.server 8000
+python3 -m http.server 8000
 ```
 
 Then visit `http://localhost:8000`.
+
+## Stock Analysis Program
+
+This repository now also includes a standalone stock screener:
+
+- Script: `stock_analyzer.py`
+- Example input: `sample_stocks.csv`
+
+It ranks stocks using a multi-factor model based on:
+
+- **Income** (dividend yield, EPS growth)
+- **Risk** (beta, volatility, debt-to-equity; lower is better)
+- **Momentum** (1m/6m/12m returns)
+- Plus **Value** and **Quality** factors
+
+### Run
+
+```bash
+python3 stock_analyzer.py sample_stocks.csv
+```
+
+### Common options
+
+```bash
+# show top 5 only
+python3 stock_analyzer.py sample_stocks.csv --top 5
+
+# customize factor weights
+python3 stock_analyzer.py sample_stocks.csv \
+  --weights "income=0.35,risk=0.25,momentum=0.30,value=0.05,quality=0.05"
+
+# export scored results
+python3 stock_analyzer.py sample_stocks.csv --output scored_stocks.csv
+```
+
+### Input CSV format
+
+Required:
+
+- `ticker`
+
+Optional but used when present:
+
+- Income: `dividend_yield`, `annual_dividend`, `eps_growth_1y`
+- Risk: `beta`, `volatility_30d`, `debt_to_equity`
+- Momentum: `return_1m`, `return_6m`, `return_12m`
+- Value: `earnings_yield`, `pe_ratio`, `fcf_yield`, `price_to_book`
+- Quality: `roe`, `profit_margin`, `net_income_growth_1y`
+- Other helper columns: `price`, `price_1m_ago`, `price_6m_ago`, `price_12m_ago`, `name`
+
+The tool derives missing metrics where possible, e.g.:
+
+- `dividend_yield = annual_dividend / price`
+- `earnings_yield = 1 / pe_ratio`
+- returns from current and lookback prices
 
 ## Controls
 
